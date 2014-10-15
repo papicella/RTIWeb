@@ -1,0 +1,595 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
+
+    <bean id="interfaceCount" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>Interface Count Near real Time (60 seconds of data) </value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+            select * from
+            (select
+                   case when dr_type = 2 then 'A'
+                        when dr_type = 3 then 'Gb'
+                        when dr_type = 5 and oracompat.instr(status, ':'::text, 1, 8) = 0 then 'IuPS'
+                        when dr_type = 5 and oracompat.instr(status, ':'::text, 1, 8) > 0 then 'IuCS'
+                        when dr_type = 9 then 'S1MME'
+                        when dr_type = 10 then 'GnGi'
+                   end interface,
+                   count(*)
+            from   iphonetrans_nrt
+            where  gploaded_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+            group by 1
+            order by 1) a
+        ]]></value>
+        </property>
+    </bean>
+
+    <bean id="eventsPerSecond" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>Events Per Second</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+            select count(*)/60 as "Count"
+            from iphonetrans_nrt
+            where  gploaded_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+        ]]></value>
+        </property>
+    </bean>
+
+    <bean id="interfaceGrouping" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>Interface Network Grouping - Near real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                select * from
+                (select
+                       case when dr_type = 2 or dr_type = 3 then '2G'
+                            when dr_type = 5 and (oracompat.instr(status, ':'::text, 1, 8) = 0 or oracompat.instr(status, ':'::text, 1, 8) > 0) then '3G'
+                            when dr_type = 9 or dr_type = 10 then '4G'
+                       end interface,
+                       count(*)
+                from iphonetrans_nrt
+                where  gploaded_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+                group by 1
+                order by 1) a;
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="2gCallDataRecords" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>2g Voice Calls - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                SELECT
+                    CASE
+                    WHEN  dtap_cc_cause  in ('16', '17', '18', '19', '21', '26', '30', '31') then 'Success'
+                    ELSE 'Failure'
+                    END as "Call Status",
+                    count(*)
+                FROM public.rti_iphonetrans_rt_drtype_2_15m
+                where  gploaded_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+                and call_type in ('11', '0', '1', '9')
+                and dtap_cc_cause <> '65535'
+                group by "Call Status";
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="3gCallDataRecords" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>3g Voice Calls - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+SELECT
+       case
+         when ranap_failure = '0' then 'Success'
+         else 'Failure' end as "Call Status",
+       count(*)
+FROM
+  (
+  SELECT
+          imsi,
+          call_type,
+          cc_cause,
+          ranap_cause,
+          end_datetime,
+          "RANAP Reset or Resource Reset",
+          "MO Call",
+          "MT Call",
+          "MT SMS",
+          "MO SMS",
+          "EM Call",
+          "SS Call",
+          lag(call_type,1,0) Over(w) as alias,
+          lag(start_datetime,1,0) OVER(w) as prv_start_datetime, -- Lag is to used determine the start_datetime from the originating call/sms.
+          lag(imsi, 1, 0) OVER(w) AS prv_imsi,
+          lag(call_type,1,0) OVER(w) AS prv_call_type,
+          lag(cc_cause,1,0) OVER(w) AS prv_cc_cause,
+          lag(ranap_cause,1,0) over(w) as prv_ranap_cause,
+          CASE
+            WHEN call_type = prv_call_type then '1'
+            ELSE '0'
+          END AS reliable,
+          CASE
+            WHEN ("MO Call" = TRUE OR "MT Call"= TRUE ) AND ("MO SMS" = FALSE AND "MT SMS" = FALSE AND "SS Call" = FALSE AND "EM Call" = FALSE) then '1'
+            ELSE '0'
+          END as call,
+          CASE
+            WHEN  cc_cause  in ('16', '18', '26', '30', '31') then '1' --  CC Causes corresponding to a normal release cause
+            ELSE '0' -- CC Causes corresponding to an abnormal release cause
+          END as call_setup_success,
+          CASE
+            WHEN ranap_cause in ('15', '14', '1', '114') then '1'
+            ELSE '0'
+          END as ranap_failure,
+          start_call
+  FROM
+      (
+      SELECT *
+        FROM (
+          SELECT  *,
+                  CASE
+                      WHEN (ranap_cause = '0' and cc_cause = '-1') and (prv_ranap_cause <> '0' or prv_cc_cause <> '-1') then '1'
+                      ELSE '0'
+                  END as start_call,
+                  CASE
+                      WHEN (ranap_cause <> '0' or cc_cause <> '-1') and (bef_ranap_cause ='0' or bef_cc_cause = '-1') then '1'
+                      ELSE '0'
+                  END as end_call
+          FROM (
+            SELECT
+                    imsi,
+                    transaction_type,
+                    call_type,
+                    cc_cause,
+                    ranap_cause,
+                    start_datetime,
+                    end_datetime,
+                    "Long Call",
+                    "RANAP Reset or Resource Reset",
+                    "MO Call",
+                    "MT Call",
+                    "MT SMS",
+                    "MO SMS",
+                    "EM Call",
+                    "SS Call",
+                    lag(start_datetime,1,0) OVER(w) as prv_start_datetime, -- Lag is to used determine the start_datetime from the originating call/sms.
+                    lag(imsi, 1, 0) OVER(w) AS prv_imsi,
+                    lag(call_type,1,0) OVER(w) AS prv_call_type,
+                    lag(cc_cause,1,0) OVER(w) AS prv_cc_cause,
+                    lag(ranap_cause,1,0) over(w) as prv_ranap_cause,
+                    lag(cast("MT SMS" as integer),1,0) over(w) as prv_MT_SMS,
+                    lag(cast("MO SMS" as integer),1,0) over(w) as prv_MO_SMS,
+                    lead(cc_cause,1,0) over(w) as bef_cc_cause,
+                    lead(ranap_cause,1,0) over(w) as bef_ranap_cause
+            FROM public.rti_iphonetrans_rt_drtype_5_iucs_15m -- A Interface 3g iucs Table
+            where  gploaded_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+            and 	call_type in ('2091', '2081') -- and (cc_cause <> '-1' or ranap_cause <> '0') --ranap_cause in ('15', '14', '1', '114')
+            WINDOW w AS (PARTITION BY imsi ORDER BY start_datetime, end_datetime ASC, ranap_cause ASC, cc_cause ASC) -- Partition data by imsi and order by start_datetime
+            ) as A
+         )as B
+        WHERE start_call = '1' or  end_call = '1' and prv_start_datetime <> '0'
+      ) as C
+  WINDOW w AS (PARTITION BY imsi ORDER BY start_datetime, end_datetime ASC, ranap_cause ASC, cc_cause ASC)
+  ) as D
+  where prv_start_datetime <> '0' and start_call = '0' and call = '1'
+group by "Call Status";
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="smsDroppedCallsList" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>3g SMS Customer List of dropped calls > 5 in last 5 minutes </value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+SELECT
+       encode(digest(imsi, 'sha512'), 'hex') as "imsi_hashed",
+       case
+         when ranap_failure = '0' then 'Success'
+         else 'Failure' end as "Call Status",
+       count(*)
+FROM
+  (
+  SELECT
+          imsi,
+          call_type,
+          cc_cause,
+          ranap_cause,
+          end_datetime,
+          "RANAP Reset or Resource Reset",
+          "MO Call",
+          "MT Call",
+          "MT SMS",
+          "MO SMS",
+          "EM Call",
+          "SS Call",
+          current_cell_idsac,
+          lag(call_type,1,0) Over(w) as alias,
+          lag(start_datetime,1,0) OVER(w) as prv_start_datetime, -- Lag is to used determine the start_datetime from the originating call/sms.
+          lag(imsi, 1, 0) OVER(w) AS prv_imsi,
+          lag(call_type,1,0) OVER(w) AS prv_call_type,
+          lag(cc_cause,1,0) OVER(w) AS prv_cc_cause,
+          lag(ranap_cause,1,0) over(w) as prv_ranap_cause,
+          CASE
+            WHEN call_type = prv_call_type then '1'
+            ELSE '0'
+          END AS reliable,
+          CASE
+            WHEN ("MO Call" = TRUE OR "MT Call"= TRUE ) AND ("MO SMS" = FALSE AND "MT SMS" = FALSE AND "SS Call" = FALSE AND "EM Call" = FALSE) then '1'
+            ELSE '0'
+          END as call,
+          CASE
+            WHEN  cc_cause  in ('16', '18', '26', '30', '31') then '1' --  CC Causes corresponding to a normal release cause
+            ELSE '0' -- CC Causes corresponding to an abnormal release cause
+          END as call_setup_success,
+          CASE
+            WHEN ranap_cause in ('15', '14', '1', '114') then '1'
+            ELSE '0'
+          END as ranap_failure,
+          start_call
+  FROM
+      (
+      SELECT *
+        FROM (
+          SELECT  *,
+                  CASE
+                      WHEN (ranap_cause = '0' and cc_cause = '-1') and (prv_ranap_cause <> '0' or prv_cc_cause <> '-1') then '1'
+                      ELSE '0'
+                  END as start_call,
+                  CASE
+                      WHEN (ranap_cause <> '0' or cc_cause <> '-1') and (bef_ranap_cause ='0' or bef_cc_cause = '-1') then '1'
+                      ELSE '0'
+                  END as end_call
+          FROM (
+            SELECT
+                    imsi,
+                    transaction_type,
+                    call_type,
+                    cc_cause,
+                    ranap_cause,
+                    start_datetime,
+                    end_datetime,
+                    current_cell_idsac,
+                    "Long Call",
+                    "RANAP Reset or Resource Reset",
+                    "MO Call",
+                    "MT Call",
+                    "MT SMS",
+                    "MO SMS",
+                    "EM Call",
+                    "SS Call",
+                    lag(start_datetime,1,0) OVER(w) as prv_start_datetime, -- Lag is to used determine the start_datetime from the originating call/sms.
+                    lag(imsi, 1, 0) OVER(w) AS prv_imsi,
+                    lag(call_type,1,0) OVER(w) AS prv_call_type,
+                    lag(cc_cause,1,0) OVER(w) AS prv_cc_cause,
+                    lag(ranap_cause,1,0) over(w) as prv_ranap_cause,
+                    lag(cast("MT SMS" as integer),1,0) over(w) as prv_MT_SMS,
+                    lag(cast("MO SMS" as integer),1,0) over(w) as prv_MO_SMS,
+                    lead(cc_cause,1,0) over(w) as bef_cc_cause,
+                    lead(ranap_cause,1,0) over(w) as bef_ranap_cause
+            FROM public.rti_iphonetrans_rt_drtype_5_iucs_15m -- A Interface 3g iucs Table
+            where  gploaded_time >= (now() - '00:05:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+            and         call_type in ('2091', '2081') -- and (cc_cause <> '-1' or ranap_cause <> '0') --ranap_cause in ('15', '14', '1', '114')
+            WINDOW w AS (PARTITION BY imsi ORDER BY start_datetime, end_datetime ASC, ranap_cause ASC, cc_cause ASC) -- Partition data by imsi and order by start_datetime
+            ) as A
+         )as B
+        WHERE start_call = '1' or  end_call = '1' and prv_start_datetime <> '0'
+      ) as C
+  WINDOW w AS (PARTITION BY imsi ORDER BY start_datetime, end_datetime ASC, ranap_cause ASC, cc_cause ASC)
+  ) as D
+  where prv_start_datetime <> '0' and start_call = '0' and call = '1'
+  and ranap_failure != 0
+group by 1, 2
+having count(*) >= 5;
+          ]]></value>
+        </property>
+    </bean>
+
+    <bean id="crxSessionRecords" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>CRX Session Data Records - Near Real Time (60 seconds of data) </value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+           select s_applicationcat as "Application Category", count(*) as "Count"
+           from crx_rtv
+           where  s_gpload_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND s_gpload_time < now()::timestamp without time zone
+           and s_applicationcat is not null
+           group by s_applicationcat;
+          ]]></value>
+        </property>
+    </bean>
+
+    <bean id="crxDataRecordsDevices" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>CRX Device Count - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                SELECT marketname as "Handset Device Name", count(*)
+                FROM
+                    (
+                    SELECT s_imsi, marketname, count(*)
+                    FROM		public.crx_rtv crx
+                        INNER JOIN
+                            public.tac_01072014 tac_info
+                        ON SUBSTRING(crx.s_imei, 1, 8)=tac_info.tac
+                    where  s_gpload_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND s_gpload_time < now()::timestamp without time zone
+                    and s_imsi IS NOT NULL
+                    GROUP BY 1, 2
+                    ) as A
+                GROUP BY 1
+                ORDER BY 2 DESC;
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="rtiDataRecordsDevices" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>RTI Device Count - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                select marketname as "Handset Device Name", count(*)
+                from
+                  (select imsi, marketname, count(*)
+                   from iphonetrans_nrt rti
+                     inner join
+                       public.tac_01072014 tac_info
+                     on substring(rti.imei, 1, 8) = tac_info.tac
+                   where  gploaded_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+                   and imsi is not null
+                   group by 1, 2
+                   ) as A
+                group by 1
+                order by 2 desc;
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="crxDataRecordsOS" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>CRX Operating System Count - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                SELECT os as "Handset Operating System", count(*)
+                FROM
+                    (
+                    SELECT s_imsi, os, count(*)
+                    FROM		public.crx_rtv crx
+                        INNER JOIN
+                            public.tac_01072014 tac_info
+                        ON SUBSTRING(crx.s_imei, 1, 8)=tac_info.tac
+                    where  s_gpload_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND s_gpload_time < now()::timestamp without time zone
+                    and s_imsi IS NOT NULL
+                    GROUP BY 1, 2
+                    ) as A
+                GROUP BY 1
+                ORDER BY 2 DESC;
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="rtiDataRecordsOS" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>RTI Operating System Count - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                select os as "Handset Operating System", count(*)
+                from
+                  (select imsi, os, count(*)
+                   from iphonetrans_nrt rti
+                     inner join
+                       public.tac_01072014 tac_info
+                     on substring(rti.imei, 1, 8) = tac_info.tac
+                   where  gploaded_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND gploaded_time < now()::timestamp without time zone
+                   and imsi is not null
+                   group by 1, 2
+                   ) as A
+                group by 1
+                order by 2 desc;
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="rtiHandSets" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>RTI Handset Counts - Near Real Time (5 Minutes of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+    select now() as capture_timestamp, * from (
+    SELECT CASE
+      WHEN tac in (
+        '35206206', '35437606', '35437706', '35437806', '35437906', '35438006',
+        '35438106', '35438206', '35438306', '35438406', '35443506', '35443606',
+        '35443706', '35443806', '35443906', '35444006', '35444106', '35444206'
+      ) then 'APPLE - A1524'
+      WHEN tac in (
+        '35206106', '35206706', '35206806', '35206906', '35207006', '35207106',
+        '35207206', '35207306', '35207406', '35207506', '35442706', '35442806',
+        '35442906', '35443006', '35443106', '35443206', '35443306', '35443406'
+      ) then 'APPLE - A1586'
+      WHEN tac in (
+        '35803105', '35854805', '35854905', '35855005', '35855105', '35855205',
+        '35879505', '35879605', '35879705', '35879805', '35879905', '35883505',
+        '35883605', '35883705', '35883805', '35883905'
+      ) then 'APPLE - A1529'
+      WHEN tac in       (
+        '35803005', '35868905', '35869005', '35869105', '35869205', '35869305',
+        '35876305', '35876405', '35884005', '35884105', '35884205', '35884305',
+        '35884405', '35198006', '35198106', '35198206', '35198306', '35198406',
+        '35202006', '35202106', '35202206', '35202306', '35202406', '35203606',
+        '35203706', '35203806', '35203906', '35204006', '35204106', '35204206',
+        '35204306', '35204406', '35204506'
+      ) then    'APPLE - A1530'
+      WHEN tac in       (
+        '35342306', '35372906'
+      ) then    'SAMSUNG - SM-G900I'
+      WHEN tac in (
+        '35190406'
+      ) then 'HTC - M8'
+      ELSE 'Other' END AS device,
+    cref."Technology",
+      Count(*)
+      FROM
+        /* public.rti_trans_rt_drtype_5_iucs_30s        iucs */
+        /* public.rti_trans_rt_drtype_5_iucs_15m   iucs */
+        public.rti_iphonetrans_rt_drtype_5_iucs_15m iucs
+    join
+    public.cref_nsw     cref
+    on iucs.current_cell_lac = cref."LAC Dec" and
+    iucs.current_cell_idsac = cref."CID Dec"
+    where tac in  (
+        -- APPLE - A1524
+        '35206206', '35437606', '35437706', '35437806', '35437906', '35438006',
+        '35438106', '35438206', '35438306', '35438406', '35443506', '35443606',
+        '35443706', '35443806', '35443906', '35444006', '35444106', '35444206',
+        -- APPLE - A1586
+        '35206106', '35206706', '35206806', '35206906', '35207006', '35207106',
+        '35207206', '35207306', '35207406', '35207506', '35442706', '35442806',
+        '35442906', '35443006', '35443106', '35443206', '35443306', '35443406',
+        -- APPLE - A1529
+        '35803105', '35854805', '35854905', '35855005', '35855105', '35855205',
+        '35879505', '35879605', '35879705', '35879805', '35879905', '35883505',
+        '35883605', '35883705', '35883805', '35883905',
+        -- APPLE - A1530
+        '35803005', '35868905', '35869005', '35869105', '35869205', '35869305',
+        '35876305', '35876405', '35884005', '35884105', '35884205', '35884305',
+        '35884405', '35198006', '35198106', '35198206', '35198306', '35198406',
+        '35202006', '35202106', '35202206', '35202306', '35202406', '35203606',
+        '35203706', '35203806', '35203906', '35204006', '35204106', '35204206',
+        '35204306', '35204406', '35204506',
+        -- HTC - M8
+        '35190406',
+        -- SAMSUNG - SM-G900I
+        '35342306', '35372906'
+    ) and call_type = '2093'
+    and
+    gploaded_time > (now() - '00:05:00'::interval)::timestamp without time zone
+    AND
+    gploaded_time < now()::timestamp without time zone
+GROUP BY 1,2
+) x;
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="crxDataRecordsTelstraApproved" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>CRX Telstra Approved Devices - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                SELECT telstraapproved "Telstra Approved", count(*)
+                FROM
+                    (
+                    SELECT s_imsi, telstraapproved, count(*)
+                    FROM		public.crx_rtv crx
+                        INNER JOIN
+                            public.tac_01072014 tac_info
+                        ON SUBSTRING(crx.s_imei, 1, 8)=tac_info.tac
+                    where  s_gpload_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND s_gpload_time < now()::timestamp without time zone
+                    and s_imsi IS NOT NULL
+                    GROUP BY 1, 2
+                    ) as A
+                GROUP BY 1
+                ORDER BY 2 DESC;
+               ]]></value>
+        </property>
+    </bean>
+
+    <bean id="crxDataRecordsHTTPSUnclassified" class="com.pivotal.rtiweb.reports.GenericQuery">
+        <property name="queryDescription">
+            <value>CRX HTTPS Unclassified - Near Real Time (60 seconds of data)</value>
+        </property>
+        <property name="query">
+            <value><![CDATA[
+                SELECT s_destipaddr || ':' || s_destportnum "Orgiginating IP/Port", s_desthost "Host IP",count(*)
+                FROM public.crx_rtv crx
+                where  s_gpload_time >= (now() - '00:01:00'::interval)::timestamp without time zone AND s_gpload_time < now()::timestamp without time zone
+                and UPPER(s_service) = 'HTTPS' and s_application is NULL
+                group by 1,2
+                order by 2, 3;
+               ]]></value>
+        </property>
+    </bean>
+
+    <!-- Query List of RTI Queries-->
+    <bean id="queryRTI" class="com.pivotal.rtiweb.reports.QueryList">
+        <property name="description">
+            <value>RTI Queries</value>
+        </property>
+        <property name="queryList">
+            <map>
+                <entry key="interfaceCount">
+                    <value>Interface Count</value>
+                </entry>
+                <entry key="eventsPerSecond">
+                    <value>Events Per Second</value>
+                </entry>
+                <entry key="2gCallDataRecords">
+                    <value>2g Voice Calls - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="3gCallDataRecords">
+                    <value>3g Voice Calls - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="interfaceGrouping">
+                    <value>Interface Network Grouping - Near real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="rtiDataRecordsDevices">
+                    <value>RTI Device Count - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="rtiDataRecordsOS">
+                    <value>RTI Operating System Count - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="rtiHandSets">
+                    <value>RTI Handset Counts - Near Real Time (5 Minutes of data)</value>
+                </entry>
+                <entry key="smsDroppedCallsList">
+                    <value>3g SMS Customer List of dropped calls > 5 in last 5 minutes</value>
+                </entry>
+            </map>
+        </property>
+    </bean>
+
+    <!-- Query List of CRX Queries-->
+    <!--
+    <bean id="queryCRX" class="com.pivotal.rtiwebreports.QueryList">
+        <property name="description">
+            <value>CRX Queries</value>
+        </property>
+        <property name="queryList">
+            <map>
+                <entry key="crxSessionRecords">
+                    <value>CRX Session Data Records - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="crxDataRecordsDevices">
+                    <value>CRX Device Count - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="crxDataRecordsOS">
+                    <value>CRX Operating System Count - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="crxDataRecordsTelstraApproved">
+                    <value>CRX Telstra Approved Devices - Near Real Time (60 seconds of data)</value>
+                </entry>
+                <entry key="crxDataRecordsHTTPSUnclassified">
+                    <value>CRX HTTPS Unclassified - Near Real Time (60 seconds of data)</value>
+                </entry>
+            </map>
+        </property>
+    </bean>
+    -->
+</beans>
