@@ -1,6 +1,6 @@
 <h2> RTI*Web </h2>
 
-RTI*Web is a purpose build application to query RTI4T events in real time as thier hit Greenplum. This tool could be used
+RTI*Web is a purpose build application to query RTI4T events in real time as they arrive in Greenplum. This tool could be used
 for other databases as it's uses generic JDBC code BUT has only been tested with Greenplum. OOTB it has reports around handset usage,
 operating system usage, dropped calls, interface counts, 2g/3g/4g traffic etc. It is NOT a graphical interface, it is meant
 to demonstrate querying data in real time as it hits Greenplum to show how quickly we can query RTI events.
