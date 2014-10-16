@@ -9,6 +9,11 @@ In order toq uery data in real time Greenplum needs to have partitions setup whi
 around 1 - 2 hours of data to provide meaningful reports with. Queries should execute in under 2 seconds regardless of how
 many events RTI has written to the transactions table
 
+You can download WAR file already packaged as follows BUT it needs the config files updated to connect to Greenplum, plus SQL 
+query-beans.xml needs updating
+
+<a href="https://dl.dropboxusercontent.com/u/15829935/fe-demos/RTIWeb/rtiwebapp.war">rtiwebapp.war</a>
+
 <h2> How to configure </h2>
 
 - Edit resources/application-context.xml to target the correct Greenplum schema
@@ -21,15 +26,18 @@ as wity structure as follows. the table can be whatever table name you like to u
 use the correct table name here.
 
 ```
-
+TODO
 ```
 
 - package as WAR
 
-- deploy to tc Server or tomcat and invoke as follows if you
+- deploy to tc Server or tomcat and invoke as follows if your WAR file is called rtiwebapp.war
 
 ```
-http://{server-ip-address}:{server-port}/{warfilename}/
+http://{server-ip-address}:{server-port}/rtiwebapp/
 ```
+
+![alt tag](https://dl.dropboxusercontent.com/u/15829935/fe-demos/RTIWeb/welcome.png)
+
 
 Created by Pas Apicella - <a href="mailto:papicella@pivotal.io">papicella@pivotal.io</a> for Pivotal RTI real Time Reporting
