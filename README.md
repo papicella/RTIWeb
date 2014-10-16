@@ -5,7 +5,7 @@ for other databases as it's uses generic JDBC code BUT has only been tested with
 operating system usage, dropped calls, interface counts, 2g/3g/4g traffic etc. It is NOT a graphical interface, it is meant
 to demonstrate querying data in real time as it hits Greenplum to show how quickly we can query RTI events.
 
-In order toq uery data in real time Greenplum needs to have partitions setup which host the most recent data. It's best to have
+In order to query data in real time Greenplum needs to have partitions setup which host the most recent data. It's best to have
 around 1 - 2 hours of data to provide meaningful reports with. Queries should execute in under 2 seconds regardless of how
 many events RTI has written to the transactions table
 
